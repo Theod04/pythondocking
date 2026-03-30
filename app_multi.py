@@ -3,6 +3,8 @@ import streamlit.components.v1 as components
 import os
 import subprocess
 import py3Dmol
+import platform
+import stat
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from meeko import MoleculePreparation
@@ -13,21 +15,29 @@ from meeko import MoleculePreparation
 st.set_page_config(page_title="Ionian University Docking Tool", layout="wide")
 
 # --- ΠΡΟΣΘΗΚΗ ΛΟΓΟΤΥΠΟΥ ΣΤΗΝ SIDEBAR ---
+# Βεβαιώσου ότι το αρχείο image_4.jpg υπάρχει στο GitHub σου
 LOGO_PATH = "image_4.jpg"
 if os.path.exists(LOGO_PATH):
     st.sidebar.image(LOGO_PATH, use_container_width=True)
-else:
-    # Αν δεν βρεθεί η εικόνα, δεν κρασάρει, απλά συνεχίζει
-    pass
-# ---------------------------------------
 
 st.title("Εργαλείο Μοριακής Πρόσδεσης (Docking)")
 st.markdown("Υπολογισμός ενέργειας σύνδεσης (Binding Affinity) με χρήση AutoDock Vina.")
 
-# Έλεγχος αν υπάρχει το Vina
-VINA_PATH = "vina.exe"
+# ---------------------------------------------------------
+# Έλεγχος & Ρύθμιση του Vina (Windows vs Linux)
+# ---------------------------------------------------------
+if platform.system() == "Windows":
+    VINA_PATH = "vina.exe"
+else:
+    # Στο Streamlit Cloud (Linux), το αρχείο πρέπει να λέγεται σκέτο vina
+    VINA_PATH = "./vina"
+    
+    # Δίνουμε δικαιώματα εκτέλεσης στο αρχείο (απαραίτητο για Linux)
+    if os.path.exists(VINA_PATH):
+        st.os.chmod(VINA_PATH, os.stat(VINA_PATH).st_mode | stat.S_IEXEC)
+
 if not os.path.exists(VINA_PATH):
-    st.error(" ΣΦΑΛΜΑ: Λείπει το αρχείο `vina.exe` από τον φάκελο της εφαρμογής.")
+    st.error(f"ΣΦΑΛΜΑ: Λείπει το αρχείο `{VINA_PATH}` από τον φάκελο της εφαρμογής.")
     st.stop()
 
 # ---------------------------------------------------------
@@ -39,13 +49,11 @@ uploaded_receptor = st.sidebar.file_uploader("Αρχείο Πρωτεΐνης (.
 st.sidebar.header("2. Ρυθμίσεις Κουτιού (Grid Box)")
 st.sidebar.info("Εισάγετε εδώ τις συντεταγμένες που βρήκατε στο Chimera.")
 
-# Session State για να κρατάμε τα νούμερα (default values)
 if 'center' not in st.session_state:
     st.session_state.center = (0.0, 0.0, 0.0)
 if 'size' not in st.session_state:
     st.session_state.size = (0.0, 0.0, 0.0)
 
-# Inputs για τις συντεταγμένες (Χειροκίνητα)
 st.sidebar.subheader("Κέντρο (Center)")
 c_x = st.sidebar.number_input("Center X", value=st.session_state.center[0], format="%.3f")
 c_y = st.sidebar.number_input("Center Y", value=st.session_state.center[1], format="%.3f")
@@ -57,17 +65,15 @@ s_y = st.sidebar.number_input("Size Y", value=st.session_state.size[1], format="
 s_z = st.sidebar.number_input("Size Z", value=st.session_state.size[2], format="%.3f")
 
 st.sidebar.subheader("Παράμετροι Vina")
-exhaustiveness = st.sidebar.slider("Exhaustiveness", 1, 32, 8,
-                                   help="Υψηλότερες τιμές αυξάνουν την ακρίβεια αλλά και τον χρόνο.")
+exhaustiveness = st.sidebar.slider("Exhaustiveness", 1, 32, 8)
 
 # ---------------------------------------------------------
 # Κυρίως Εφαρμογή
 # ---------------------------------------------------------
 st.subheader("3. Εισαγωγή Φαρμάκου (Ligand)")
 smiles = st.text_input("SMILES Code:", value="", placeholder="π.χ. COC1=C(C=C2C(=C1)CC(C2=O)CC3CCN(CC3)CC4=CC=CC=C4)OC")
-st.caption("Εισάγετε τον κωδικό SMILES του μορίου.")
 
-run_btn = st.button(" Έναρξη Docking")
+run_btn = st.button("Έναρξη Docking")
 
 if run_btn and uploaded_receptor and smiles:
 
@@ -75,17 +81,17 @@ if run_btn and uploaded_receptor and smiles:
     for f in ["receptor.pdbqt", "ligand.pdbqt", "output.pdbqt"]:
         if os.path.exists(f): os.remove(f)
 
-    # Καθαρισμός Receptor (αφαιρούμε γραμμές CONECT για να μην κολλάει το Vina)
+    # Αποθήκευση Receptor
     raw_content = uploaded_receptor.getvalue().decode("utf-8")
     clean_lines = [line for line in raw_content.splitlines() if not line.startswith("CONECT")]
     with open("receptor.pdbqt", "w") as f:
         f.write("\n".join(clean_lines))
 
-    # Προετοιμασία Ligand από SMILES
+    # Προετοιμασία Ligand
     with st.spinner("Προετοιμασία δομής φαρμάκου..."):
         try:
             mol = Chem.MolFromSmiles(smiles)
-            if not mol: raise ValueError("Μη έγκυρο SMILES string.")
+            if not mol: raise ValueError("Μη έγκυρο SMILES.")
             mol = Chem.AddHs(mol)
             AllChem.EmbedMolecule(mol, randomSeed=42)
             prep = MoleculePreparation()
@@ -111,45 +117,35 @@ if run_btn and uploaded_receptor and smiles:
 
         if process.returncode == 0:
             st.success("Το Docking ολοκληρώθηκε!")
-
-            # Εξαγωγή του Score
+            
+            # Εύρεση Affinity Score
             affinity = "N/A"
             for line in process.stdout.splitlines():
                 parts = line.split()
                 if len(parts) >= 2 and parts[0] == "1":
-                    try:
-                        affinity = str(float(parts[1]))
-                        break
-                    except:
-                        continue
-
-            st.metric(" Binding Affinity", f"{affinity} kcal/mol")
+                    affinity = parts[1]
+                    break
+            
+            st.metric("Binding Affinity", f"{affinity} kcal/mol")
 
             # Οπτικοποίηση
-            st.subheader("Αποτελέσματα")
             if os.path.exists("output.pdbqt"):
                 with open("output.pdbqt", "r") as f:
                     docked_data = f.read()
 
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    view = py3Dmol.view(width=700, height=500)
-                    with open("receptor.pdbqt", "r") as f:
-                        view.addModel(f.read(), "pdbqt")
-                    view.setStyle({'model': -1}, {"cartoon": {"color": "gray", "opacity": 0.7}})
-                    view.addModel(docked_data, "pdbqt")
-                    view.setStyle({'model': -1}, {"stick": {"colorscheme": "greenCarbon"}})
-                    view.zoomTo()
-                    components.html(view._make_html(), height=500)
-
-                with col2:
-                    st.write("Λήψη")
-                    st.download_button("Docked Ligand", docked_data, "docked_ligand.pdbqt")
-                    with open("receptor.pdbqt", "r") as f: rec_txt = f.read()
-                    st.download_button("Full Complex", rec_txt + "\n" + docked_data, "complex.pdbqt")
+                view = py3Dmol.view(width=700, height=500)
+                with open("receptor.pdbqt", "r") as f:
+                    view.addModel(f.read(), "pdbqt")
+                view.setStyle({'model': -1}, {"cartoon": {"color": "gray", "opacity": 0.7}})
+                view.addModel(docked_data, "pdbqt")
+                view.setStyle({'model': -1}, {"stick": {"colorscheme": "greenCarbon"}})
+                view.zoomTo()
+                components.html(view._make_html(), height=500)
+                
+                st.download_button("Λήψη Αποτελέσματος (PDBQT)", docked_data, "docked_ligand.pdbqt")
         else:
-            st.error(" Το Docking απέτυχε. Ελέγξτε τις συντεταγμένες του κουτιού.")
-            st.code(process.stdout)
+            st.error("Το Docking απέτυχε.")
+            st.code(process.stderr)
 
 elif run_btn:
-    st.warning(" Ανεβάστε αρχείο PDBQT και συμπληρώστε το SMILES.")
+    st.warning("Παρακαλώ ανεβάστε αρχείο PDBQT και SMILES.")
