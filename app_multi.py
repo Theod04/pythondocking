@@ -14,8 +14,7 @@ from meeko import MoleculePreparation
 # ---------------------------------------------------------
 st.set_page_config(page_title="Ionian University Docking Tool", layout="wide")
 
-# --- ΠΡΟΣΘΗΚΗ ΛΟΓΟΤΥΠΟΥ ΣΤΗΝ SIDEBAR ---
-# Βεβαιώσου ότι το αρχείο image_4.jpg υπάρχει στο GitHub σου
+# Προσπάθεια εμφάνισης λογοτύπου
 LOGO_PATH = "image_4.jpg"
 if os.path.exists(LOGO_PATH):
     st.sidebar.image(LOGO_PATH, use_container_width=True)
@@ -24,20 +23,28 @@ st.title("Εργαλείο Μοριακής Πρόσδεσης (Docking)")
 st.markdown("Υπολογισμός ενέργειας σύνδεσης (Binding Affinity) με χρήση AutoDock Vina.")
 
 # ---------------------------------------------------------
-# Έλεγχος & Ρύθμιση του Vina (Windows vs Linux)
+# Έλεγχος & Ρύθμιση του Vina (Πιο ευέλικτος έλεγχος)
 # ---------------------------------------------------------
-if platform.system() == "Windows":
-    VINA_PATH = "vina.exe"
-else:
-    # Στο Streamlit Cloud (Linux), το αρχείο πρέπει να λέγεται σκέτο vina
-    VINA_PATH = "./vina"
-    
-    # Δίνουμε δικαιώματα εκτέλεσης στο αρχείο (απαραίτητο για Linux)
-    if os.path.exists(VINA_PATH):
-        st.os.chmod(VINA_PATH, os.stat(VINA_PATH).st_mode | stat.S_IEXEC)
+VINA_PATH = None
+# Λίστα με πιθανά ονόματα που μπορεί να πήρε το αρχείο στο GitHub
+possible_names = ["vina", "vina.exe", "vina_1.2.5_linux_x86_64"]
 
-if not os.path.exists(VINA_PATH):
-    st.error(f"ΣΦΑΛΜΑ: Λείπει το αρχείο `{VINA_PATH}` από τον φάκελο της εφαρμογής.")
+for name in possible_names:
+    if os.path.exists(name):
+        VINA_PATH = "./" + name
+        break
+
+if VINA_PATH:
+    # Αν ΔΕΝ είμαστε σε Windows (άρα είμαστε στο Streamlit Cloud), δίνουμε δικαιώματα εκτέλεσης
+    if platform.system() != "Windows":
+        try:
+            st.info(f"Ρύθμιση εκτελέσιμου: {VINA_PATH}")
+            os.chmod(VINA_PATH, os.stat(VINA_PATH).st_mode | stat.S_IEXEC)
+        except Exception as e:
+            st.warning(f"Προσοχή στα δικαιώματα: {e}")
+else:
+    st.error("ΣΦΑΛΜΑ: Δεν βρέθηκε το εκτελέσιμο αρχείο του Vina στο φάκελο.")
+    st.info(f"Αρχεία που βλέπει το σύστημα: {os.listdir('.')}")
     st.stop()
 
 # ---------------------------------------------------------
@@ -47,12 +54,8 @@ st.sidebar.header("1. Εισαγωγή Υποδοχέα (Receptor)")
 uploaded_receptor = st.sidebar.file_uploader("Αρχείο Πρωτεΐνης (.pdbqt)", type=["pdbqt"])
 
 st.sidebar.header("2. Ρυθμίσεις Κουτιού (Grid Box)")
-st.sidebar.info("Εισάγετε εδώ τις συντεταγμένες που βρήκατε στο Chimera.")
-
-if 'center' not in st.session_state:
-    st.session_state.center = (0.0, 0.0, 0.0)
-if 'size' not in st.session_state:
-    st.session_state.size = (0.0, 0.0, 0.0)
+if 'center' not in st.session_state: st.session_state.center = (0.0, 0.0, 0.0)
+if 'size' not in st.session_state: st.session_state.size = (15.0, 15.0, 15.0)
 
 st.sidebar.subheader("Κέντρο (Center)")
 c_x = st.sidebar.number_input("Center X", value=st.session_state.center[0], format="%.3f")
@@ -71,21 +74,19 @@ exhaustiveness = st.sidebar.slider("Exhaustiveness", 1, 32, 8)
 # Κυρίως Εφαρμογή
 # ---------------------------------------------------------
 st.subheader("3. Εισαγωγή Φαρμάκου (Ligand)")
-smiles = st.text_input("SMILES Code:", value="", placeholder="π.χ. COC1=C(C=C2C(=C1)CC(C2=O)CC3CCN(CC3)CC4=CC=CC=C4)OC")
+smiles = st.text_input("SMILES Code:", placeholder="π.χ. CC(=O)OC1=CC=CC=C1C(=O)O")
 
 run_btn = st.button("Έναρξη Docking")
 
 if run_btn and uploaded_receptor and smiles:
-
     # Καθαρισμός παλιών αρχείων
     for f in ["receptor.pdbqt", "ligand.pdbqt", "output.pdbqt"]:
         if os.path.exists(f): os.remove(f)
 
     # Αποθήκευση Receptor
     raw_content = uploaded_receptor.getvalue().decode("utf-8")
-    clean_lines = [line for line in raw_content.splitlines() if not line.startswith("CONECT")]
     with open("receptor.pdbqt", "w") as f:
-        f.write("\n".join(clean_lines))
+        f.write(raw_content)
 
     # Προετοιμασία Ligand
     with st.spinner("Προετοιμασία δομής φαρμάκου..."):
@@ -144,7 +145,7 @@ if run_btn and uploaded_receptor and smiles:
                 
                 st.download_button("Λήψη Αποτελέσματος (PDBQT)", docked_data, "docked_ligand.pdbqt")
         else:
-            st.error("Το Docking απέτυχε.")
+            st.error("Το Docking απέτυχε. Ελέγξτε τις ρυθμίσεις του Grid Box.")
             st.code(process.stderr)
 
 elif run_btn:
