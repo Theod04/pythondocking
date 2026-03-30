@@ -3,3 +3,5 @@ py3Dmol
 rdkit
 meeko
 scipy
+gemmi
+numpy
